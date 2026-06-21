@@ -3,7 +3,7 @@ import sounddevice as sd                         # ספרייה להקלטה מ�
 from tensorflow import keras                     # מייבא את keras מתוך tensorflow — משמש לטעינת המודל שאימנו
 from audio_utils import extract_melspectrogram   # הפונקציה שהכנו שממירה אודיו לתמונת צליל (mel spectrogram)
 
-MODEL_PATH = "sos_model.keras"               # הנתיב לקובץ המודל השמור
+MODEL_PATH = "src/sos_model.keras"               # הנתיב לקובץ המודל השמור
 CATEGORIES = ["scream", "crying", "explosion", "background"]  # שמות הקטגוריות בסדר שהמודל למד אותן
 SR = 22050                                       # קצב דגימה — 22050 נקודות לשנייה (סטנדרט לאודיו)
 DURATION = 2                                     # כמה שניות לכל חלון האזנה
