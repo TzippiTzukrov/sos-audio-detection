@@ -8,12 +8,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from dotenv import load_dotenv
 from tensorflow import keras
+from twilio.rest import Client
+from pydantic import BaseModel
 
 sys.path.append("src")
 from audio_utils import extract_melspectrogram
 
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
+TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_FROM = os.getenv("TWILIO_FROM_NUMBER")
+twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
+
+parent_phone = None
+alert_cooldown = {}
+alert_prefs = {"crying": True, "scream": True, "explosion": True}
 api_key_header = APIKeyHeader(name="X-API-Key")
 
 app = FastAPI()
@@ -35,6 +45,38 @@ MEAN, STD = -30.0, 15.0
 model = keras.models.load_model("src/sos_model.keras")
 buffer = np.zeros(int(DURATION * SR), dtype="float32")
 is_listening = False
+
+
+class PhoneRequest(BaseModel):
+    phone: str
+
+class PrefsRequest(BaseModel):
+    crying: bool = True
+    scream: bool = True
+    explosion: bool = True
+
+
+def send_sms(label: str):
+    """שולח SMS להורה — רק אם עברו 60 שניות מההתרעה האחרונה"""
+    import time
+    if not parent_phone:
+        return
+    now = time.time()
+    if not alert_prefs.get(label, True):
+        return
+    if now - alert_cooldown.get(label, 0) < 60:
+        return
+    alert_cooldown[label] = now
+    messages = {
+        "scream": "🚨 התרעה: זוהתה צרחה בבית!",
+        "crying": "👶 התרעה: התינוק בוכה!",
+        "explosion": "💥 התרעה: זוהה פיצוץ בבית!",
+    }
+    twilio_client.messages.create(
+        body=messages.get(label, "🚨 התרעת SOS"),
+        from_=TWILIO_FROM,
+        to=parent_phone,
+    )
 
 
 def verify_key(key: str = Depends(api_key_header)):
@@ -86,8 +128,25 @@ async def websocket_endpoint(websocket: WebSocket):
             buffer[-chunk_size:] = new_audio
             result = process_chunk(buffer.copy())
             await websocket.send_json(result)
+            if result["alert"]:
+                send_sms(result["label"])
     except WebSocketDisconnect:
         is_listening = False
+
+
+@app.post("/prefs")
+async def set_prefs(req: PrefsRequest, key: str = Depends(verify_key)):
+    global alert_prefs
+    alert_prefs = req.dict()
+    return {"status": "ok"}
+
+
+@app.post("/phone")
+async def set_phone(req: PhoneRequest, key: str = Depends(verify_key)):
+    """שומר את מספר הטלפון של ההורה"""
+    global parent_phone
+    parent_phone = req.phone
+    return {"status": "ok", "phone": parent_phone}
 
 
 @app.post("/start")
