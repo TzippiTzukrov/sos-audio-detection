@@ -7,8 +7,8 @@ PROCESSED_DIR = "data/processed"
 CATEGORIES = ["scream", "crying", "explosion", "background"]
 
 def process_file(file_path):
-    audio, sr = librosa.load(file_path, sr=22050, duration=5.0)
-    target_length = 22050 * 5
+    audio, sr = librosa.load(file_path, sr=22050, duration=2.0)
+    target_length = 22050 * 2
     if len(audio) < target_length:
         audio = np.pad(audio, (0, target_length - len(audio)))
     else:

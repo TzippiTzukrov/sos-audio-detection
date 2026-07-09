@@ -3,10 +3,11 @@ import shutil, os, csv
 src_base = r'C:\Users\This User\Downloads\UrbanSound8K'
 dst_base = r'C:\Users\This User\Desktop\SOS-Audio-Detection\data\raw'
 mapping = {
-    '2': 'scream',      # children_playing
     '6': 'explosion',   # gun_shot
+    '8': 'scream',      # siren → scream (התרעה/מצוקה)
     '0': 'background',  # air_conditioner
     '1': 'background',  # car_horn
+    '2': 'background',  # children_playing — לא צעקת מצוקה, שייך לרקע
     '3': 'background',  # dog_bark
     '4': 'background',  # drilling
     '5': 'background',  # engine_idling

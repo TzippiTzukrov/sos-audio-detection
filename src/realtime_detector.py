@@ -1,17 +1,25 @@
 import numpy as np                              # ספרייה לעבודה עם מערכים ומספרים
+import json                                      # לטעינת ערכי נרמול שנשמרו באימון
 import sounddevice as sd                         # ספרייה להקלטה מהמיקרופון
 from tensorflow import keras                     # מייבא את keras מתוך tensorflow — משמש לטעינת המודל שאימנו
 from audio_utils import extract_melspectrogram   # הפונקציה שהכנו שממירה אודיו לתמונת צליל (mel spectrogram)
 
 MODEL_PATH = "src/sos_model.keras"               # הנתיב לקובץ המודל השמור
+NORM_PATH = "src/norm_stats.json"                # ערכי נרמול שנשמרו בזמן האימון
 CATEGORIES = ["scream", "crying", "explosion", "background"]  # שמות הקטגוריות בסדר שהמודל למד אותן
 SR = 22050                                       # קצב דגימה — 22050 נקודות לשנייה (סטנדרט לאודיו)
-DURATION = 2                                     # כמה שניות לכל חלון האזנה
-STEP = 1                                         # כל כמה שניות מתחיל חלון חדש (חפיפה של שנייה אחת)
-THRESHOLD = 0.50                                 # רף הביטחון — המודל חייב להיות בטוח ב-50% לפחות כדי להתריע
+DURATION = 2                                     # כמה שניות לכל חלון האזנה — חייב להתאים לאימון (2 שניות)
+STEP = 1                                         # כל כמה שניות מתחיל חלון חדש (חפיפה של 4 שניות)
+THRESHOLD = 0.30                                 # רף הביטחון — המודל חייב להיות בטוח ב-30% לפחות כדי להתריע
 
 model = keras.models.load_model(MODEL_PATH)      # טוען את המודל המאומן מהדיסק לזיכרון
-MEAN, STD = -30.0, 15.0                          # ערכים לנרמול — קירוב של הממוצע וסטיית התקן מנתוני האימון
+
+# טעינת ערכי הנרמול האמיתיים מהאימון (במקום ניחוש)
+with open(NORM_PATH, "r") as f:
+    norm_stats = json.load(f)
+MEAN = norm_stats["mean"]
+STD = norm_stats["std"]
+print(f"[נרמול] mean={MEAN:.4f}, std={STD:.4f}")
 
 
 def process_chunk(audio: np.ndarray) -> None:    # פונקציה שמקבלת חתיכת אודיו ומנתחת אותה

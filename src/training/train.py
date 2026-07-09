@@ -1,4 +1,5 @@
 import os
+import json
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
@@ -22,8 +23,16 @@ for label, category in enumerate(CATEGORIES):
 X = np.array(X)
 
 # ===== נרמול =====
-X = (X - X.mean()) / (X.std() + 1e-8)
+MEAN = X.mean()
+STD = X.std()
+X = (X - MEAN) / (STD + 1e-8)
 X = X[..., np.newaxis]
+
+# שמירת ערכי הנרמול לשימוש ב-inference
+norm_stats = {"mean": float(MEAN), "std": float(STD)}
+with open("src/norm_stats.json", "w") as f:
+    json.dump(norm_stats, f)
+print(f"נרמול נשמר: mean={MEAN:.4f}, std={STD:.4f}")
 
 y = keras.utils.to_categorical(y, num_classes=4)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
