@@ -5,9 +5,6 @@ import os
 # =============================================================================
 # המודל הוא בינארי: crying vs. background
 #
-# scream ו-explosion הוצאו בכוונה — הם שלב שני שדורש דאטה נפרד ומגוון.
-# עד אז הם לא נכנסים לאימון כדי לא לזהם את ה-background.
-#
 # SPEECH: חשוב לכלול קטגוריות דיבור ב-background!
 # ללא נתוני דיבור, המודל לא ראה מעולם ספקטרוגרמת קול אנושי רגיל,
 # ולכן מבלבל דיבור עם בכי (שניהם קול אנושי עם אנרגיה בתדרי הקול).
@@ -51,11 +48,8 @@ CATEGORY_MAP = {
     "clapping":         "background",
     "breathing":        "background",
 
-    # --- קטגוריות שהוצאו בכוונה ---
-    # "siren"         → scream (שלב שני)
-    # "glass_breaking"→ scream (שלב שני)
-    # "fireworks"     → explosion (שלב שני)
-    # "thunderstorm"  → explosion (שלב שני)
+    # --- קטגוריות שלא בשימוש מ-ESC-50 ---
+    # "siren", "glass_breaking", "fireworks", "thunderstorm" — לא ממופות לאף קטגוריה
 }
 
 CATEGORIES = ["crying", "background"]

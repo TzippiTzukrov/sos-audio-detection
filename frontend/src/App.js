@@ -1,132 +1,184 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import "./App.css";
 
 const API_KEY = "sos-secret-key-2024";
-const WS_URL = `ws://localhost:8080/ws?api_key=${API_KEY}`;
+const WS_URL  = `ws://localhost:8080/ws?api_key=${API_KEY}`;
 const API_URL = "http://localhost:8080";
 
-const LABELS = {
-  scream:     { text: "צרחה",  color: "#e74c3c" },
-  crying:     { text: "בכי",   color: "#e67e22" },
-  explosion:  { text: "פיצוץ", color: "#c0392b" },
-  background: { text: "רקע",   color: "#1D9E75" },
-};
-
-const ICONS = {
-  scream: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
-  crying: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 010 7"/></svg>,
-  explosion: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
-  background: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/></svg>,
-};
+// כמה מתוך N שניות האחרונות צריכות להיות בכי כדי להפעיל התראה
+const CRY_WINDOW    = 6;   // בודקים חלון של 6 שניות
+const CRY_MIN_HITS  = 3;   // מספיק 3 מתוך 6 שניות של בכי
+// כמה מתוך N שניות האחרונות צריכות להיות שקט כדי לכבות התראה
+const CALM_WINDOW   = 20;  // בודקים חלון של 20 שניות
+const CALM_MIN_HITS = 18;  // 18 מתוך 20 שניות של שקט = באמת נרגע
 
 export default function App() {
-  const [isListening, setIsListening] = useState(false);
-  const [wsConnected, setWsConnected] = useState(false);
-  const [result, setResult] = useState(null);
-  const [alerts, setAlerts] = useState([]);
-  const [phone, setPhone] = useState("");
-  const [phoneSaved, setPhoneSaved] = useState(false);
-  const [alertPrefs, setAlertPrefs] = useState({ crying: true, scream: true, explosion: true });
-  const ws = useRef(null);
-  const canvasRef = useRef(null);
-  const pointsRef = useRef(Array.from({ length: 90 }, () => 0.05));
-  const scaledRef = useRef(false);
-  const animRef = useRef(null);
+  const [isListening,  setIsListening]  = useState(false);
+  const [wsConnected,  setWsConnected]  = useState(false);
+  const [result,       setResult]       = useState(null);
+  const [alertState,   setAlertState]   = useState(null); // null | "crying" | "calm"
+  const [alertTime,    setAlertTime]    = useState("");
+  const [events,       setEvents]       = useState([]);
+  const [smsEnabled,   setSmsEnabled]   = useState(false);
+  const [phone,        setPhone]        = useState("");
+  const [phoneSaved,   setPhoneSaved]   = useState(false);
 
-  // WebSocket
+  const ws           = useRef(null);
+  const canvasRef    = useRef(null);
+  const barsRef      = useRef(Array(55).fill(0.04));
+  const animRef      = useRef(null);
+  const scaledRef    = useRef(false);
+  const cryWindowRef  = useRef([]);  // היסטוריית N שניות אחרונות (true/false)
+  const calmWindowRef = useRef([]);  // היסטוריית שקט לכיבוי התראה
+  const lastVolRef   = useRef(0.04);
+  const inAlertRef   = useRef(false);
+
+  // ── WebSocket ──
   useEffect(() => {
     const connect = () => {
-      ws.current = new WebSocket(WS_URL);
-      ws.current.onopen = () => setWsConnected(true);
-      ws.current.onclose = () => { setWsConnected(false); setTimeout(connect, 3000); };
-      ws.current.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        setResult(data);
-        const level = data.probs ? (100 - (data.probs.background ?? 100)) / 100 : 0.05;
-        pointsRef.current.shift();
-        pointsRef.current.push(Math.max(0.05, level + Math.random() * 0.04));
-        if (data.alert) {
-          setAlerts((prev) => [
-            { ...data, time: new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) },
-            ...prev.slice(0, 9),
-          ]);
-        }
+      const socket = new WebSocket(WS_URL);
+      ws.current = socket;
+      socket.onopen  = () => setWsConnected(true);
+      socket.onclose = () => { setWsConnected(false); setTimeout(connect, 3000); };
+      socket.onerror = () => {};
+      socket.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          setResult(data);
+
+          // עדכון גרף — volume מהבאקנד (אותו מיקרופון שהמודל שומע)
+          const level = typeof data.volume === "number"
+            ? Math.max(0.02, data.volume)
+            : 0.02;
+          lastVolRef.current = level;
+          barsRef.current = [...barsRef.current.slice(1), level];
+
+          // לוגיקת התראה — חלון זמן במקום consecutive
+          const isCry = data.label === "crying" && data.confidence >= 40;
+          cryWindowRef.current  = [...cryWindowRef.current,  isCry].slice(-CRY_WINDOW);
+          calmWindowRef.current = [...calmWindowRef.current, !isCry].slice(-CALM_WINDOW);
+
+          const cryHits  = cryWindowRef.current.filter(Boolean).length;
+          const calmHits = calmWindowRef.current.filter(Boolean).length;
+
+          if (!inAlertRef.current && cryHits >= CRY_MIN_HITS) {
+            inAlertRef.current = true;
+            calmWindowRef.current = [];  // אפס — מתחילים לספור שקט רק מעכשיו
+            const t = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+            setAlertState("crying");
+            setAlertTime(t);
+            setEvents(prev => [
+              { type: "cry", text: "בכי זוהה", time: t },
+              ...prev.slice(0, 9),
+            ]);
+          }
+
+          if (inAlertRef.current && calmHits >= CALM_MIN_HITS) {
+            inAlertRef.current = false;
+            cryWindowRef.current  = [];
+            calmWindowRef.current = [];
+            const t = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+            setAlertState("calm");   // מציג "נרגע"
+            setEvents(prev => [
+              { type: "calm", text: "התינוק נרגע", time: t },
+              ...prev.slice(0, 9),
+            ]);
+            // "נרגע" נעלם אחרי 8 שניות — "בוכה" נשאר עד שמגיע "נרגע"
+            setTimeout(() => setAlertState(null), 8000);
+          }        } catch (_) {}
       };
     };
     connect();
     return () => ws.current?.close();
   }, []);
 
-  // Canvas — רץ רק כשמאזינים
-  useEffect(() => {
+  // ── Canvas — מצייר לפי barsRef בקצב מלא ──
+  const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
 
-    const draw = () => {
-      if (!scaledRef.current) {
-        canvas.width = canvas.clientWidth * 2;
-        canvas.height = canvas.clientHeight * 2;
-        ctx.scale(2, 2);
-        scaledRef.current = true;
-      }
-      const w = canvas.clientWidth, h = canvas.clientHeight;
-      ctx.clearRect(0, 0, w, h);
-      const pts = pointsRef.current;
-      const bw = w / pts.length;
-      pts.forEach((p, i) => {
-        const bh = p * h * 0.9;
-        ctx.fillStyle = i > pts.length - 5 ? "#0F6E56" : "rgba(29,158,117,0.35)";
-        ctx.fillRect(i * bw, (h - bh) / 2, bw * 0.55, bh);
-      });
-    };
+    const cssW = canvas.clientWidth;
+    const cssH = canvas.clientHeight;
 
-    if (isListening) {
-      const tick = () => {
-        pointsRef.current.shift();
-        pointsRef.current.push(0.08 + Math.random() * 0.15);
-        draw();
-        animRef.current = requestAnimationFrame(tick);
-      };
-      // עצור אנימציה ישנה
-      cancelAnimationFrame(animRef.current);
-      // התחל אנימציה חדשה בקצב איטי
-      let last = 0;
-      const throttled = (ts) => {
-        if (ts - last > 300) { tick(); last = ts; }
-        else animRef.current = requestAnimationFrame(throttled);
-      };
-      animRef.current = requestAnimationFrame(throttled);
-    } else {
-      cancelAnimationFrame(animRef.current);
-      draw(); // ציור סטטי
+    if (!scaledRef.current || canvas.width !== cssW * window.devicePixelRatio) {
+      canvas.width  = cssW * window.devicePixelRatio;
+      canvas.height = cssH * window.devicePixelRatio;
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      scaledRef.current = true;
     }
 
-    const onResize = () => { scaledRef.current = false; draw(); };
+    const w = cssW;
+    const h = cssH;
+    ctx.clearRect(0, 0, w, h);
+
+    const bars = barsRef.current;
+    const bw   = w / bars.length;
+
+    bars.forEach((p, i) => {
+      const bh    = Math.max(3, p * h * 0.82);
+      const alpha = 0.3 + (i / bars.length) * 0.7;
+      const fresh = i > bars.length - 4;
+      ctx.fillStyle = fresh
+        ? `rgba(29,185,116,${alpha})`
+        : `rgba(29,185,116,${alpha * 0.55})`;
+      ctx.fillRect(i * bw + 1.5, (h - bh) / 2, Math.max(2, bw - 3), bh);
+    });
+  }, []);
+
+  const isListeningRef = useRef(false);
+  useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
+
+  useEffect(() => {
+    let frameCount = 0;
+    const loop = () => {
+      frameCount++;
+      // כל 8 פריימים (~120ms) — מוסיף בר עם וריאציה קטנה סביב ה-volume האחרון
+      if (isListeningRef.current && frameCount % 8 === 0) {
+        const base  = lastVolRef.current;
+        const jitter = (Math.random() - 0.5) * base * 0.4;
+        const val   = Math.max(0.02, Math.min(1, base + jitter));
+        barsRef.current = [...barsRef.current.slice(1), val];
+      }
+      drawCanvas();
+      animRef.current = requestAnimationFrame(loop);
+    };
+    animRef.current = requestAnimationFrame(loop);
+    const onResize = () => { scaledRef.current = false; };
     window.addEventListener("resize", onResize);
     return () => {
       cancelAnimationFrame(animRef.current);
       window.removeEventListener("resize", onResize);
     };
-  }, [isListening]);
+  }, [drawCanvas]);
 
-  // סנכרן העדפות SMS לbackend בכל שינוי
+  // ── Toggle listen ──
+  const toggle = () => {
+    const next = !isListening;
+    setIsListening(next);
+    if (!next) {
+      barsRef.current = Array(55).fill(0.02);
+      lastVolRef.current = 0.02;
+      setResult(null);
+      setAlertState(null);
+      cryWindowRef.current  = [];
+      calmWindowRef.current = [];
+      inAlertRef.current    = false;
+    }
+    fetch(`${API_URL}/${next ? "start" : "stop"}`, {
+      method: "POST",
+      headers: { "X-API-Key": API_KEY },
+    }).catch(() => {});
+  };
+
+  // ── SMS prefs → backend ──
   useEffect(() => {
     fetch(`${API_URL}/prefs`, {
       method: "POST",
       headers: { "X-API-Key": API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify(alertPrefs),
+      body: JSON.stringify({ crying: smsEnabled }),
     }).catch(() => {});
-  }, [alertPrefs]);
-
-  const toggle = () => {
-    const endpoint = isListening ? "stop" : "start";
-    // עדכן UI מיד — לא מחכים לתשובת השרת
-    const next = !isListening;
-    setIsListening(next);
-    if (!next) setResult(null);
-    fetch(`${API_URL}/${endpoint}`, { method: "POST", headers: { "X-API-Key": API_KEY } }).catch(() => {});
-  };
+  }, [smsEnabled]);
 
   const savePhone = async () => {
     try {
@@ -135,123 +187,132 @@ export default function App() {
         headers: { "X-API-Key": API_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({ phone }),
       });
-    } catch {}
-    setPhoneSaved(true);
+      setPhoneSaved(true);
+    } catch (_) {}
   };
 
-  const isAlert = result?.alert && isListening;
-  const currentLabel = result?.label ?? "background";
+  const isCrying = alertState === "crying";
 
   return (
-    <div className="card">
+    <div className="shell">
 
-      {/* HEADER */}
-      <div className="header">
-        <div>
+      {/* ── HEADER ── */}
+      <header className="hdr">
+        <div className="hdr-title">
           <h1>שומר הבית</h1>
-          <p className="subtitle">Guardian Aura</p>
+          <span>Guardian Aura</span>
         </div>
-        <span className={`conn-dot ${wsConnected ? "on" : "off"}`} title={wsConnected ? "מחובר" : "לא מחובר"} />
-      </div>
+        <div className="hdr-right">
+          <div className="conn-pill">
+            <span className={`conn-dot ${wsConnected ? "on" : "off"}`} />
+            {wsConnected ? "מחובר" : "מנסה להתחבר..."}
+          </div>
+        </div>
+      </header>
 
-      {/* TOP ROW */}
+      {/* ── TOP ROW ── */}
       <div className="top-row">
 
-        {/* גרף */}
+        {/* גרף גלים */}
         <div className="panel">
-          <p className="panel-label">פעילות קולית בזמן אמת</p>
-          <canvas ref={canvasRef} height="90" style={{ width: "100%", display: "block" }} />
-          <div className="wave-axis">
-            <span>36ש</span><span>24ש</span><span>12ש</span><span className="now">now</span>
+          <p className="panel-title">פעילות קולית בזמן אמת</p>
+          <div className="wave-wrap">
+            <canvas ref={canvasRef} style={{ width: "100%", height: "96px" }} />
           </div>
         </div>
 
-        {/* סטטוס + כפתור */}
+        {/* כפתור + סטטוס */}
         <div className="panel status-panel">
-          <div className="pulse-wrap">
-            {isListening && <div className={`ring${isAlert ? " alert-ring" : ""}`} />}
-            {isListening && <div className={`ring delay${isAlert ? " alert-ring" : ""}`} />}
+          <div className="orb-wrap">
+            {isListening && <div className={`orb-ring ${isCrying ? "danger-ring" : ""}`} />}
+            {isListening && <div className={`orb-ring d2 ${isCrying ? "danger-ring" : ""}`} />}
             <button
-              className={`main-btn ${isListening ? (isAlert ? "btn-alert" : "btn-active") : "btn-idle"}`}
+              className={`orb-btn ${isListening ? (isCrying ? "alert-state" : "active") : ""}`}
               onClick={toggle}
-              aria-label={isListening ? "עצור האזנה" : "התחל האזנה"}
+              aria-label={isListening ? "עצור" : "הפעל"}
             >
-              {isListening ? (
-                <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-              ) : (
-                <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-              )}
+              {isListening
+                ? <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                : <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+              }
             </button>
           </div>
 
-          <p className="status-text">
-            {!isListening && <><strong>כבוי</strong><br /><span className="sub">לחץ להפעלה</span></>}
-            {isListening && !isAlert && <><strong style={{ color: "var(--accent-dark)" }}>מאזין...</strong><br /><span className="sub">סביבה תקינה</span></>}
-            {isListening && isAlert && <><strong style={{ color: LABELS[currentLabel]?.color }}>⚠ {LABELS[currentLabel]?.text}</strong><br /><span className="sub">התרעה פעילה</span></>}
-          </p>
+          <div className="status-label">
+            {!isListening && (
+              <>
+                <strong>כבוי</strong>
+                <span className="sub">לחץ להפעלה</span>
+              </>
+            )}
+            {isListening && !isCrying && (
+              <>
+                <strong style={{ color: "var(--accent)" }}>מאזין</strong>
+                <span className="sub">סביבה תקינה</span>
+              </>
+            )}
+            {isListening && isCrying && (
+              <>
+                <strong style={{ color: "var(--danger)" }}>התראה!</strong>
+                <span className="sub">בכי זוהה</span>
+              </>
+            )}
+          </div>
 
-          {/* הסתברויות — מוצגות רק כשמאזינים */}
-          {isListening && result && (
-            <div className="probs-mini">
-              {Object.entries(result.probs).map(([cat, prob]) => (
-                <div key={cat} className="prob-row">
-                  <span className="prob-label">{LABELS[cat]?.text}</span>
-                  <div className="bar-bg">
-                    <div className="bar" style={{ width: `${prob}%`, background: LABELS[cat]?.color }} />
-                  </div>
-                  <span className="prob-pct">{prob}%</span>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* הסתברויות — הוסרו, מיותר למשתמש */}
         </div>
       </div>
 
-      {/* BOTTOM ROW */}
+      {/* ── BOTTOM ROW ── */}
       <div className="bottom-row">
 
-        {/* הגדרות */}
+        {/* הגדרות SMS */}
         <div className="panel">
-          <p className="settings-label">הגדרות SMS</p>
-          {[["crying", "בכי"], ["scream", "צרחה"], ["explosion", "פיצוץ"]].map(([key, label]) => (
-            <div className="toggle-row" key={key}>
-              <span className="label">SMS על {label}</span>
-              <button
-                className={`switch${alertPrefs[key] ? "" : " off"}`}
-                onClick={() => setAlertPrefs(p => ({ ...p, [key]: !p[key] }))}
-                aria-label={`התרעת ${label}`}
-              />
+          <p className="panel-title">הגדרות התראה</p>
+
+          <div className="toggle-row">
+            <div>
+              <span className="toggle-label">קבלת SMS על בכי</span>
+              <span className="toggle-sub">שליחת הודעה לטלפון</span>
             </div>
-          ))}
-          <div className="divider" />
-          <p className="settings-label" style={{ marginBottom: 8 }}>מספר לשליחת SMS</p>
-          <div className="phone-section">
-            <input
-              type="tel"
-              placeholder="+972501234567"
-              value={phone}
-              onChange={(e) => { setPhone(e.target.value); setPhoneSaved(false); }}
+            <button
+              className={`switch ${smsEnabled ? "on" : ""}`}
+              onClick={() => { setSmsEnabled(v => !v); setPhoneSaved(false); }}
+              aria-label="הפעלת SMS"
             />
-            <button className="btn-save" onClick={savePhone} disabled={!phone}>
-              {phoneSaved ? "✓" : "שמור"}
-            </button>
           </div>
+
+          {smsEnabled && (
+            <>
+              <div className="divider" />
+              <p style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 4 }}>מספר טלפון לשליחת SMS</p>
+              <div className="phone-row">
+                <input
+                  type="tel"
+                  placeholder="+972501234567"
+                  value={phone}
+                  onChange={e => { setPhone(e.target.value); setPhoneSaved(false); }}
+                />
+                <button className="btn-save" onClick={savePhone} disabled={!phone}>
+                  {phoneSaved ? "✓ נשמר" : "שמור"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* אירועים */}
+        {/* אירועים אחרונים */}
         <div className="panel">
-          <p className="alerts-label">אירועים אחרונים</p>
-          {alerts.length === 0 ? (
-            <p className="no-alerts">אין אירועים עדיין</p>
+          <p className="panel-title">אירועים אחרונים</p>
+          {events.length === 0 ? (
+            <p className="no-events">אין אירועים עדיין</p>
           ) : (
-            alerts.slice(0, 5).map((a, i) => (
-              <div key={i} className="alert-item">
-                <span className={`alert-icon ${a.label !== "background" ? "danger" : ""}`}>
-                  {ICONS[a.label] ?? ICONS.crying}
-                </span>
-                <div>
-                  <p className="alert-title">{LABELS[a.label]?.text} זוהה</p>
-                  <p className="alert-time">{a.time} · {a.confidence}%</p>
+            events.slice(0, 5).map((ev, i) => (
+              <div key={i} className="event-item">
+                <div className={`event-dot ${ev.type === "calm" ? "calm" : ""}`} />
+                <div className="event-body">
+                  <p className="event-title">{ev.text}</p>
+                  <p className="event-time">{ev.time}</p>
                 </div>
               </div>
             ))
@@ -259,14 +320,32 @@ export default function App() {
         </div>
       </div>
 
-      {/* FOOTER */}
-      <div className="footer">
-        <span>
-          <span className={`conn-dot ${wsConnected ? "on" : "off"}`} style={{ marginLeft: 4 }} />
-          {wsConnected ? "מחובר לשרת" : "מנסה להתחבר..."}
-        </span>
+      {/* ── ALERT BANNER ── */}
+      {alertState && (
+        <div className={`alert-banner ${alertState === "calm" ? "calm" : ""}`}>
+          <div className="banner-icon-wrap">
+            {isCrying
+              ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width:16, height:16, color:"var(--danger)" }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width:16, height:16, color:"var(--accent)" }}><polyline points="20 6 9 17 4 12"/></svg>
+            }
+          </div>
+          <div className="banner-text">
+            <strong>{isCrying ? "בכי זוהה" : "התינוק נרגע"}</strong>
+            <span>{isCrying ? "זוהה בכי רציף — יש להיגש לתינוק" : "לא זוהה בכי זמן מה"}</span>
+          </div>
+          {alertTime && <span className="banner-time">{alertTime}</span>}
+        </div>
+      )}
+
+      {/* ── FOOTER ── */}
+      <footer className="ftr">
+        <div className="ftr-mic">
+          <span className={`mic-dot ${isListening ? "active" : ""}`} />
+          {isListening ? "מיקרופון פעיל" : "מיקרופון כבוי"}
+        </div>
         <span>v2.0</span>
-      </div>
+      </footer>
+
     </div>
   );
 }
