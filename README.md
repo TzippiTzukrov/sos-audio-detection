@@ -2,10 +2,10 @@
 
 > זיהוי בכי תינוק חכם בזמן אמת · התרעה מיידית לטלפון ההורה
 
-[![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
-[![TensorFlow](https://img.shields.io/badge/TensorFlow-2.x-FF6F00?style=flat&logo=tensorflow&logoColor=white)](https://tensorflow.org)
-[![React](https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react&logoColor=black)](https://reactjs.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.139-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[!(https://img.shields.io/badge/Python-3.13-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
+[!(https://img.shields.io/badge/TensorFlow-2.x-FF6F00?style=flat&logo=tensorflow&logoColor=white)](https://tensorflow.org)
+[!(https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react&logoColor=black)](https://reactjs.org)
+[!(https://img.shields.io/badge/FastAPI-0.139-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 
 ---
 
@@ -16,7 +16,7 @@ CRY-GUARD היא מערכת AI שמאזינה ברציפות דרך המיקרו
 המערכת פותחה כפרויקט גמר בתחום **בינה מלאכותית** על ידי:
 - 👩‍💻 פייגי רוזנפלד
 - 👩‍💻 ציפי צוקרוב
-- 👩‍💻 אביטל
+- 👩‍💻 אביטל כהן
 
 ---
 
